@@ -1,7 +1,6 @@
-
 # agents/info_extractor.py
-
 import ollama
+from ollama import AsyncClient
 import json
 import logging
 import os
@@ -67,22 +66,44 @@ For keywords: focus on technical terms not already in: {existing_tags}
         
         # Extract and parse content
         content = result["message"]["content"]
-        if "```json" in content:
-            json_str = content.split("```json", 1)[1].split("```", 1)[0].strip()
-            extracted_data = json.loads(json_str)
-        else:
-            extracted_data = json.loads(content)
+        logger.info(f"Received response from LLM, content length: {len(content)}")
         
-        # Combine tags
-        all_tags = existing_tags.copy()
-        for tag in extracted_data.get("keywords", []):
-            if tag not in all_tags:
-                all_tags.append(tag)
-        
-        return {
-            "software": extracted_data.get("software", []),
-            "tags": all_tags
-        }
+        try:
+            if "```json" in content:
+                json_str = content.split("```json", 1)[1].split("```", 1)[0].strip()
+                extracted_data = json.loads(json_str)
+            else:
+                extracted_data = json.loads(content)
+                
+            # Combine tags
+            all_tags = existing_tags.copy()
+            for tag in extracted_data.get("keywords", []):
+                if tag not in all_tags:
+                    all_tags.append(tag)
+            
+            return {
+                "software": extracted_data.get("software", []),
+                "tags": all_tags
+            }
+        except json.JSONDecodeError as je:
+            logger.error(f"JSON decode error: {je}, content: {content[:200]}...")
+            
+            # Try to extract keywords even if JSON parsing fails
+            keywords = []
+            try:
+                for line in content.split('\n'):
+                    if '**' in line:
+                        possible_keyword = line.split('**')[1].strip() if '**' in line else ''
+                        if possible_keyword and len(possible_keyword) > 2:
+                            keywords.append(possible_keyword)
+            except Exception:
+                pass
+                
+            return {
+                "software": [],
+                "tags": list(set(existing_tags + keywords)),
+                "error": f"JSON parsing error: {str(je)}"
+            }
         
     except Exception as e:
         logger.error(f"Error during info extraction: {e}")
@@ -94,12 +115,14 @@ For keywords: focus on technical terms not already in: {existing_tags}
 
 async def _call_llm(prompt: str) -> Dict[str, Any]:
     """Call Ollama LLM with the given prompt"""
-    return await ollama.chat(
+    client = AsyncClient()
+    response = await client.chat(
         model="gemma3:12b-8k",
         messages=[{"role": "user", "content": prompt}],
         format="json",
         options={"temperature": 0.1}
     )
+    return response
 
 async def save_extraction_results(video_id: str, results: Dict[str, Any]) -> str:
     """Save extraction results to output folder"""
@@ -111,10 +134,12 @@ async def save_extraction_results(video_id: str, results: Dict[str, Any]) -> str
     with open(output_path, 'w') as f:
         json.dump(results, f, indent=2)
     
+    logger.info(f"Results saved to {output_path}")
     return output_path
 
 async def run_extraction(video_id: str, transcript_data: List[Dict[str, Any]], video_metadata: Dict[str, Any]) -> str:
     """Run the extraction process and save results"""
+    logger.info(f"Starting extraction for video {video_id}")
     results = await extract_info(transcript_data, video_metadata)
     output_path = await save_extraction_results(video_id, results)
     logger.info(f"Extraction results saved to {output_path}")
@@ -137,8 +162,8 @@ if __name__ == "__main__":
     
     transcript = data.get('transcript', [])
     video_metadata = {
-        'video': data.get('video', {}),
-        'channel': data.get('channel', {})
+        'video': data.get('video_info', {}).get('video', {}),
+        'channel': data.get('video_info', {}).get('channel', {})
     }
     
     asyncio.run(run_extraction(video_id, transcript, video_metadata))
