@@ -1,9 +1,9 @@
-# utils/state_manager.py
+# utils/state_manager.py - Modified version
 import json
 import os
 from datetime import datetime
-from typing import Optional, Dict, Any
-from models.schemas import State  # Use State instead of WorkflowState and NodeState
+from typing import Optional, Dict, Any, List
+from models.schemas import State, Error
 
 class StateManager:
     def __init__(self, output_dir: str = "state"):
@@ -35,8 +35,34 @@ class StateManager:
         # Update timestamp
         state.timestamp = datetime.now().isoformat()
         
-        with open(state_path, 'w') as f:
-            f.write(state.model_dump_json(indent=2))
+        try:
+            with open(state_path, 'w') as f:
+                f.write(state.model_dump_json(indent=2))
+        except Exception as e:
+            print(f"Error saving state: {e}")
+    
+    def add_error(self, state: State, error: Error) -> State:
+        """Add error to state and update status"""
+        # Initialize errors list if it doesn't exist
+        if "errors" not in state.interim_results:
+            state.interim_results["errors"] = []
+            
+        # Add error to list
+        state.interim_results["errors"].append(error.model_dump())
+        
+        # Update completion status based on error phase
+        if error.phase == "process_extraction":
+            state.completion_status.process_extraction = "failed"
+        elif error.phase == "process_summarization":
+            state.completion_status.process_summarization = "failed"
+        elif error.phase == "info_extraction":
+            state.completion_status.info_extraction = "failed"
+        elif error.phase == "output_compilation":
+            state.completion_status.output_compilation = "failed"
+            
+        # Save updated state
+        self.save_state(state)
+        return state
     
     def initialize_state(self, channel_id: str, video_id: str) -> State:
         """Create a new state or load existing one"""
@@ -51,6 +77,7 @@ class StateManager:
                 "processes": [],
                 "metadata": {},
                 "software": [],
-                "tags": []
+                "tags": [],
+                "errors": []
             }
         )
