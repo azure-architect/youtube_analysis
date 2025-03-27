@@ -1,3 +1,4 @@
+from __future__ import annotations  # Add this at the top of the file
 from pydantic_graph import BaseNode, Graph, End, GraphRunContext
 from dataclasses import dataclass
 from typing import Dict, Any, List, Optional
@@ -5,6 +6,7 @@ from typing import Dict, Any, List, Optional
 from models.schemas import State
 from utils.state_manager import StateManager
 
+# This ensures forward references in type hints work properly
 @dataclass
 class YTAnalysisState:
     state: State

@@ -1,11 +1,12 @@
+# utils/state_manager.py
 import json
 import os
 from datetime import datetime
 from typing import Optional, Dict, Any
-from models.schemas import State
+from models.schemas import State  # Use State instead of WorkflowState and NodeState
 
 class StateManager:
-    def __init__(self, output_dir: str = "output"):
+    def __init__(self, output_dir: str = "state"):
         self.output_dir = output_dir
         os.makedirs(output_dir, exist_ok=True)
     
