@@ -79,18 +79,9 @@ def save_channel_videos_cache(cache):
     except Exception as e:
         logger.warning(f"Could not save channel videos cache: {e}")
 
+
+
 def get_youtube_video_data(video_id, include_channel_videos=False, max_channel_videos=10):
-    """
-    Retrieves YouTube video and channel data with caching.
-
-    Args:
-        video_id (str): YouTube video ID
-        include_channel_videos (bool): Whether to include channel videos in the response
-        max_channel_videos (int): Maximum number of channel videos to include
-
-    Returns:
-        dict: Comprehensive video data or None on failure
-    """
     try:
         api_key = os.getenv('YT_DATA_API_KEY')
         if not api_key:
@@ -99,9 +90,9 @@ def get_youtube_video_data(video_id, include_channel_videos=False, max_channel_v
 
         youtube = build('youtube', 'v3', developerKey=api_key)
 
-        # 1. Fetch Video Details
+        # Fetch Video Details
         video_response = youtube.videos().list(
-            part='snippet,contentDetails,statistics,topicDetails',
+            part='snippet,contentDetails,statistics,topicDetails,status',
             id=video_id
         ).execute()
 
@@ -113,12 +104,13 @@ def get_youtube_video_data(video_id, include_channel_videos=False, max_channel_v
         video_snippet = video['snippet']
         video_statistics = video.get('statistics', {})
         video_topic_details = video.get('topicDetails', {})
+        video_status = video.get('status', {})
+        video_content_details = video.get('contentDetails', {})
         channel_id = video_snippet['channelId']
 
-        # 2. Channel Data (with Caching and TTL)
+        # Channel Data (with caching)
         channel_data = get_channel_data(youtube, channel_id, video_snippet)
-        if channel_data is None:  # Handle channel retrieval failure
-            logger.warning(f"Could not retrieve channel data for video ID: {video_id}")
+        if channel_data is None:
             channel_data = {
                 "id": channel_id,
                 "title": video_snippet.get('channelTitle', 'Unknown Channel'),
@@ -129,7 +121,7 @@ def get_youtube_video_data(video_id, include_channel_videos=False, max_channel_v
                 "isVerified": False
             }
 
-        # 3. Comments - Only get the count
+        # Comments data
         comments_data = get_comments_data(video_statistics)
 
         # Format publishedAt date
@@ -137,6 +129,14 @@ def get_youtube_video_data(video_id, include_channel_videos=False, max_channel_v
             published_at = datetime.strptime(video_snippet['publishedAt'], '%Y-%m-%dT%H:%M:%SZ').isoformat()
         except (ValueError, TypeError):
             published_at = 'N/A'
+
+        # Create a modified snippet without description
+        cleaned_snippet = {k:v for k,v in video_snippet.items() if k != 'description'}
+        
+        # Remove description from localized if it exists
+        if 'localized' in cleaned_snippet:
+            if 'description' in cleaned_snippet['localized']:
+                del cleaned_snippet['localized']['description']
 
         result = {
             "video": {
@@ -149,12 +149,15 @@ def get_youtube_video_data(video_id, include_channel_videos=False, max_channel_v
                 "tags": video_snippet.get('tags', []),
                 "topicDetails": video_topic_details,
                 "thumbnail": video_snippet['thumbnails']['standard']['url'] if 'standard' in video_snippet.get('thumbnails',{}) else 'N/A',
-                "comments": comments_data
+                "comments": comments_data,
+                "snippet": cleaned_snippet,
+                "statistics": video_statistics,
+                "status": video_status,
+                "licensedContent": video_content_details.get('licensedContent', False)
             },
             "channel": channel_data
         }
 
-        # 4. Include channel videos if requested
         if include_channel_videos:
             result["channelVideos"] = get_channel_videos(youtube, channel_id, max_results=max_channel_videos)
 
@@ -163,11 +166,12 @@ def get_youtube_video_data(video_id, include_channel_videos=False, max_channel_v
     except HttpError as e:
         logger.error(f"HTTP error: {e.resp.status} - {e.content.decode()}")
         if e.resp.status == 403 and "quotaExceeded" in str(e.content):
-            logger.error("YouTube API quota exceeded. Consider waiting or optimizing API usage.")
+            logger.error("YouTube API quota exceeded.")
         return None
     except Exception as e:
         logger.exception(f"Error: {e}")
         return None
+
 
 def get_channel_data(youtube, channel_id, video_snippet):
     """Fetches channel data, using cache if available and valid."""
